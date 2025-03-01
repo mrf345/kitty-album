@@ -5,6 +5,11 @@ import readline, curses, pathlib, sys, os, signal, threading, time, tempfile
 ITER_DELAY = 0.1
 
 
+class ScalingError(Exception):
+    """Exception raised when an image cannot be scaled."""
+    pass
+
+
 class ThreadMixin:
     _done = _stopped = False
 
@@ -39,7 +44,7 @@ class HelpersMixin:
         return path.is_file() and path.suffix.lower()[1:] in suffixes
 
     @staticmethod
-    def get_w_x_h(cmd: str) -> tuple[int]:
+    def get_w_x_h(cmd: str) -> tuple[int, int]:
         """
         Execute a command to get window dimensions.
 
@@ -49,7 +54,16 @@ class HelpersMixin:
         Returns:
             tuple[int]: A tuple containing the width and height of the window.
         """
-        return map(int, os.popen(cmd).read().split('x'))
+        proc = os.popen(cmd)
+        status = None
+
+        while status is None:
+            status = proc._proc.poll()
+
+        if status != 0:
+            raise ScalingError(f'Command "{cmd}" failed with exit code {status}')
+
+        return map(int, proc.read().split('x'))
 
 
 class ImagesLoader(threading.Thread, ThreadMixin, HelpersMixin):
@@ -368,6 +382,18 @@ class Album(HelpersMixin):
         self._window.refresh()
         self.display_next_and_prev(muted=True)
 
+    def display_error(self):
+        """
+        Display an error message.
+        """
+        self._window.clear()
+        self._window.refresh()
+        size = os.get_terminal_size()
+        msg = 'Error: can\'t read image header'
+        self._window.addstr(size.lines // 2, (size.columns - 20) // 2, msg, curses.A_BOLD)
+        self._window.addstr(size.lines // 2 + 2, size.columns // 2 - 5, 'Press enter to exit', curses.A_REVERSE)
+        self._window.refresh()
+
     def display_next_and_prev(self, muted=False):
         """
         Display navigation options for the next and previous images.
@@ -405,13 +431,18 @@ class Album(HelpersMixin):
             pathlib.Path | None: The path to the displayed image.
         """
         self.display_loading()
-        current = self.get_scaled_current()
-        cmd = f'kitty icat --clear "{current}"' + (' 2> /dev/null' if hide_err else '')
+        current = None
 
-        self._window.erase()
-        self._window.refresh()
-        if os.system(cmd):
-            return
+        try:
+            current = self.get_scaled_current()
+
+            self._window.erase()
+            self._window.refresh()
+            if os.system(f'kitty icat --clear "{current}"' + (' 2> /dev/null' if hide_err else '')):
+                return
+
+        except ScalingError:
+            self.display_error()
 
         size = os.get_terminal_size()
         name_limit = size.columns - 43
