@@ -10,30 +10,58 @@ class ThreadMixin:
 
     @property
     def done(self) -> bool:
+        """Return whether the thread has completed its execution."""
         return self._done
 
     @property
     def stopped(self) -> bool:
+        """Return whether the thread has been stopped."""
         return self._stopped
 
     def stop(self):
+        """Set the stopped flag to True, signaling the thread to stop."""
         self._stopped = True
 
 
 class HelpersMixin:
     @staticmethod
     def is_file_type_in(path: pathlib.Path, suffixes: set | list) -> bool:
+        """
+        Check if the given path is a file and has one of the specified suffixes.
+
+        Args:
+            path (pathlib.Path): The path to check.
+            suffixes (set | list): A collection of suffixes to compare against.
+
+        Returns:
+            bool: True if the file matches any of the suffixes, False otherwise.
+        """
         return path.is_file() and path.suffix.lower()[1:] in suffixes
 
     @staticmethod
     def get_w_x_h(cmd: str) -> tuple[int]:
+        """
+        Execute a command to get window dimensions.
+
+        Args:
+            cmd (str): The command to execute.
+
+        Returns:
+            tuple[int]: A tuple containing the width and height of the window.
+        """
         return map(int, os.popen(cmd).read().split('x'))
 
 
 class ImagesLoader(threading.Thread, ThreadMixin, HelpersMixin):
+    """
+    A thread that loads image files from a specified path and invokes a callback with the list of images.
+    """
     suffixes = {'jpg', 'jpeg', 'png', 'gif', 'tiff', 'webp', 'bmp', 'svg'}
 
     def run(self):
+        """
+        Run the image loading process.
+        """
         callback, path, entry_path = self._args
         index, files = 0, []
 
@@ -52,11 +80,17 @@ class ImagesLoader(threading.Thread, ThreadMixin, HelpersMixin):
 
 
 class ImageScalerThread(threading.Thread, ThreadMixin, HelpersMixin):
+    """
+    A thread that scales an image to fit within the terminal window size.
+    """
     _scaled: tempfile._TemporaryFileWrapper | None = None
     scaled: pathlib.Path | None = None
     menu_height = 60
 
     def run(self):
+        """
+        Run the image scaling process.
+        """
         file, i_height, i_width = self._args
         w_width, w_height = self.get_w_x_h('kitty icat --print-window-size')
         width = w_width if i_width > w_width else i_width
@@ -77,9 +111,21 @@ class ImageScalerThread(threading.Thread, ThreadMixin, HelpersMixin):
 
 
 class ImageScaler(HelpersMixin):
+    """
+    Manages image scaling threads, caching scaled images to avoid redundant processing.
+    """
     _store: dict[str, ImageScalerThread] = {}
 
     def scale(self, file: pathlib.Path) -> str:
+        """
+        Scale an image and return a unique identifier for the scaled image.
+
+        Args:
+            file (pathlib.Path): The path to the image file.
+
+        Returns:
+            str: A unique identifier for the scaled image.
+        """
         i_width, i_height = self.get_w_x_h(f'identify -ping -format "%wx%h" "{file}"')
         i_id = f'{file.name}_{i_width}_{i_height}'
 
@@ -91,16 +137,43 @@ class ImageScaler(HelpersMixin):
         return i_id
 
     def get(self, id: str) -> pathlib.Path:
+        """
+        Get the scaled image path for a given identifier.
+
+        Args:
+            id (str): The unique identifier of the scaled image.
+
+        Returns:
+            pathlib.Path: The path to the scaled image.
+        """
         return self._store[id].scaled
 
     def is_done(self, id: str) -> bool:
+        """
+        Check if the scaling process for a given identifier has completed.
+
+        Args:
+            id (str): The unique identifier of the scaled image.
+
+        Returns:
+            bool: True if the scaling is done, False otherwise.
+        """
         return self._store[id].done
 
     def stop(self, id: str) -> None:
+        """
+        Stop the scaling thread for a given identifier and remove it from the store.
+
+        Args:
+            id (str): The unique identifier of the scaled image.
+        """
         self._store[id].stop()
         del self._store[id]
 
     def teardown(self) -> None:
+        """
+        Clean up all temporary files and stop all scaling threads.
+        """
         for thread in self._store.values():
             thread._scaled and thread._scaled.close()
 
@@ -108,6 +181,9 @@ class ImageScaler(HelpersMixin):
 
 
 class Album(HelpersMixin):
+    """
+    Manages the album viewing interface using curses, displaying images from a specified directory.
+    """
     exit_keys = {4, 10, 113} # NOTE: enter/q/ctrl+d codes
     scaling_blacklist = {'gif', 'svg'}
  
@@ -119,6 +195,12 @@ class Album(HelpersMixin):
     _scaler: ImageScaler
 
     def __init__(self, path: pathlib.Path):
+        """
+        Initialize the Album instance.
+
+        Args:
+            path (pathlib.Path): The path to the directory or image file.
+        """
         entry_path = path if path.is_file() else None
         self._scaler = ImageScaler()
         self._loader = ImagesLoader(
@@ -133,6 +215,13 @@ class Album(HelpersMixin):
         self._loader.start()
 
     def on_load(self, files: list[pathlib.Path], current_idx: int):
+        """
+        Callback function invoked when image loading is complete.
+
+        Args:
+            files (list[pathlib.Path]): The list of loaded image paths.
+            current_idx (int): The index of the currently selected image.
+        """
         self._files = files
         self._index = current_idx
         displayed = False
@@ -142,10 +231,16 @@ class Album(HelpersMixin):
             time.sleep(ITER_DELAY)
 
     def teardown(self):
+        """
+        Clean up resources, stopping the loader and scaler.
+        """
         self._loader.is_alive() and self._loader.stop()
         self._scaler.teardown()
 
     def resize(self, *args):
+        """
+        Handle terminal resize events by resizing the curses window.
+        """
         size = os.get_terminal_size()
         curses.resizeterm(size.lines, size.columns)
         self._window.redrawwin()
@@ -153,43 +248,97 @@ class Album(HelpersMixin):
 
     @property
     def current(self) -> pathlib.Path:
-        return self._files and self._files[self.index]
+        """
+        Get the currently selected image path.
+
+        Returns:
+            pathlib.Path: The path to the current image.
+        """
+        return self._files[self.index]
 
     @property
     def index(self) -> int:
+        """
+        Get the index of the currently selected image.
+
+        Returns:
+            int: The index of the current image.
+        """
         return self._index
 
     @index.setter
     def index(self, value: int):
+        """
+        Set the index of the currently selected image and refresh the display.
+
+        Args:
+            value (int): The new index for the selected image.
+        """
         if value != self._index:
             self._index = value
             self.display()
 
     @property
     def remaining(self) -> int:
+        """
+        Get the number of images remaining after the current one.
+
+        Returns:
+            int: The count of remaining images.
+        """
         return len(self._files)-1-self.index
 
     def has_next(self) -> bool:
+        """
+        Check if there is a next image to view.
+
+        Returns:
+            bool: True if there is a next image, False otherwise.
+        """
         return len(self._files) > 1 and self.index <= len(self._files)-2
 
     def has_prev(self) -> bool:
+        """
+        Check if there is a previous image to view.
+
+        Returns:
+            bool: True if there is a previous image, False otherwise.
+        """
         return self.index > 0
 
     def goto_next(self):
+        """
+        Move to the next image if available.
+        """
         if self.has_next():
             self.index += 1
 
     def goto_prev(self):
+        """
+        Move to the previous image if available.
+        """
         if self.has_prev():
             self.index -= 1
 
     def goto_first(self):
+        """
+        Move to the first image in the album.
+        """
         self.index = 0
 
     def goto_last(self):
+        """
+        Move to the last image in the album.
+        """
         self.index = len(self._files)-1
 
     def get_scaled_current(self) -> pathlib.Path:
+        """
+        Get the scaled version of the current image.
+
+        Returns:
+            pathlib.Path: The path to the scaled image.
+        """
         if self.is_file_type_in(self.current, self.scaling_blacklist):
             return self.current
 
@@ -208,6 +357,9 @@ class Album(HelpersMixin):
         return self._scaler.get(i_id)
 
     def display_loading(self):
+        """
+        Display a loading message while images are being loaded.
+        """
         self._window.clear()
         self._window.refresh()
         size = os.get_terminal_size()
@@ -217,6 +369,12 @@ class Album(HelpersMixin):
         self.display_next_and_prev(muted=True)
 
     def display_next_and_prev(self, muted=False):
+        """
+        Display navigation options for the next and previous images.
+
+        Args:
+            muted (bool): If True, dim the navigation indicators.
+        """
         size = os.get_terminal_size()
 
         self._window.refresh()
@@ -237,6 +395,15 @@ class Album(HelpersMixin):
         )
 
     def display(self, hide_err=False) -> pathlib.Path | None:
+        """
+        Display the current image and handle user navigation.
+
+        Args:
+            hide_err (bool): If True, suppress error messages during image display.
+
+        Returns:
+            pathlib.Path | None: The path to the displayed image.
+        """
         self.display_loading()
         current = self.get_scaled_current()
         cmd = f'kitty icat --clear "{current}"' + (' 2> /dev/null' if hide_err else '')
@@ -259,6 +426,12 @@ class Album(HelpersMixin):
         return current
 
     def __call__(self, window: curses.window):
+        """
+        Main entry point for the album viewer.
+
+        Args:
+            window (curses.window): The curses window used for displaying images.
+        """
         self._window = window
         key = 0
 
