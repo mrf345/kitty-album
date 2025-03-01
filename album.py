@@ -170,7 +170,7 @@ class Album(HelpersMixin):
         return len(self._files)-1-self.index
 
     def has_next(self) -> bool:
-        return self.index <= len(self._files)-2
+        return len(self._files) > 1 and self.index <= len(self._files)-2
 
     def has_prev(self) -> bool:
         return self.index > 0
@@ -214,6 +214,27 @@ class Album(HelpersMixin):
         self._window.addstr(size.lines // 2, size.columns // 2, 'Loading...', curses.A_BOLD)
         self._window.addstr(size.lines // 2 + 2, size.columns // 2 - 5, 'Press enter to exit', curses.A_REVERSE)
         self._window.refresh()
+        self.display_next_and_prev(muted=True)
+
+    def display_next_and_prev(self, muted=False):
+        size = os.get_terminal_size()
+
+        self._window.refresh()
+        self._window.addstr(
+            size.lines - 1,
+            1,
+            f' <-({self.index}) ',
+            curses.A_ITALIC if muted or not self.has_prev() else curses.A_REVERSE,
+        )
+
+        self._window.refresh()
+        label = f' ({self.remaining})-> '
+        self._window.addstr(
+            size.lines - 1,
+            size.columns - (len(label) + 1),
+            label,
+            curses.A_ITALIC if muted or not self.has_next() else curses.A_REVERSE
+        )
 
     def display(self, hide_err=False) -> pathlib.Path | None:
         self.display_loading()
@@ -233,15 +254,7 @@ class Album(HelpersMixin):
 
         self._window.refresh()
         self._window.addstr(size.lines - 1, size.columns // 2 - len(name) // 2, name, curses.A_BOLD)
-
-        if self.has_prev():
-            self._window.refresh()
-            self._window.addstr(size.lines - 1, 1, f' <-({self.index}) ', curses.A_REVERSE)
-
-        if self.has_next():
-            self._window.refresh()
-            label = f' ({self.remaining})-> '
-            self._window.addstr(size.lines - 1, size.columns - (len(label) + 1), label, curses.A_REVERSE)
+        self.display_next_and_prev()
 
         return current
 
