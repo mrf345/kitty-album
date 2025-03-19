@@ -15,6 +15,8 @@
 | right arrow     | Go to next image     |
 | end key         | Go to last image     |
 | home key        | Go to first image    |
+| = key           | Zoom in              |
+| - key           | Zoom out             |
 | enter/q/ctrl+d  | Exit                 |
 
 

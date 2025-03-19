@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-import readline, curses, pathlib, sys, os, signal, threading, time, tempfile
+import readline, curses, pathlib, sys, os, signal, threading, time, tempfile, typing
 
 
 ITER_DELAY = 0.1
@@ -44,7 +44,7 @@ class HelpersMixin:
         return path.is_file() and path.suffix.lower()[1:] in suffixes
 
     @staticmethod
-    def get_w_x_h(cmd: str) -> tuple[int, int]:
+    def get_w_x_h(cmd: str) -> typing.Iterable[int]:
         """
         Execute a command to get window dimensions.
 
@@ -58,7 +58,7 @@ class HelpersMixin:
         status = None
 
         while status is None:
-            status = proc._proc.poll()
+            status = proc._proc.poll() # type: ignore
 
         if status != 0:
             raise ScalingError(f'Command "{cmd}" failed with exit code {status}')
@@ -105,12 +105,12 @@ class ImageScalerThread(threading.Thread, ThreadMixin, HelpersMixin):
         """
         Run the image scaling process.
         """
-        file, i_height, i_width = self._args
+        file, i_height, i_width, zoom = self._args
         w_width, w_height = self.get_w_x_h('kitty icat --print-window-size')
         width = w_width if i_width > w_width else i_width
         height = (w_height - self.menu_height) if i_height > (w_height - self.menu_height)  else i_height
 
-        if i_height > (w_height - self.menu_height):
+        if i_height > (w_height - self.menu_height) or zoom:
             self._scaled = tempfile.NamedTemporaryFile(suffix=file.suffix)
             self.scaled = pathlib.Path(self._scaled.name)
             proc = os.popen(f'magick "{file}" -resize {width}x{height} "{self._scaled.name}"')._proc
@@ -130,7 +130,7 @@ class ImageScaler(HelpersMixin):
     """
     _store: dict[str, ImageScalerThread] = {}
 
-    def scale(self, file: pathlib.Path) -> str:
+    def scale(self, file: pathlib.Path, zoom=0) -> str:
         """
         Scale an image and return a unique identifier for the scaled image.
 
@@ -141,16 +141,21 @@ class ImageScaler(HelpersMixin):
             str: A unique identifier for the scaled image.
         """
         i_width, i_height = self.get_w_x_h(f'identify -ping -format "%wx%h" "{file}"')
+
+        if zoom > 0:
+            i_width = int(i_width + (i_width / 100  * (zoom * 10)))
+            i_height = int(i_height + (i_height / 100  * (zoom * 10)))
+
         i_id = f'{file.name}_{i_width}_{i_height}'
 
         if i_id in self._store:
             return i_id
 
-        self._store[i_id] = ImageScalerThread(args=(file, i_height, i_width))
+        self._store[i_id] = ImageScalerThread(args=(file, i_height, i_width, zoom))
         self._store[i_id].start()
         return i_id
 
-    def get(self, id: str) -> pathlib.Path:
+    def get(self, id: str) -> pathlib.Path | None:
         """
         Get the scaled image path for a given identifier.
 
@@ -189,7 +194,8 @@ class ImageScaler(HelpersMixin):
         Clean up all temporary files and stop all scaling threads.
         """
         for thread in self._store.values():
-            thread._scaled and thread._scaled.close()
+            if thread._scaled:
+                thread._scaled.close()
 
         self._store.clear()
 
@@ -202,9 +208,9 @@ class Album(HelpersMixin):
     scaling_blacklist = {'gif', 'svg'}
  
     _loading = True
-    _index = 0
+    _index = _zoom_level = 0
     _files: list[pathlib.Path] = []
-    _window: curses.window | None = None
+    _window: curses.window
     _loader: ImagesLoader
     _scaler: ImageScaler
 
@@ -238,7 +244,7 @@ class Album(HelpersMixin):
         """
         self._files = files
         self._index = current_idx
-        displayed = False
+        displayed = None
 
         while not displayed and not self._loader.stopped:
             displayed = self.display(True)
@@ -290,6 +296,7 @@ class Album(HelpersMixin):
         """
         if value != self._index:
             self._index = value
+            self._zoom_level = 0
             self.display()
 
     @property
@@ -301,6 +308,38 @@ class Album(HelpersMixin):
             int: The count of remaining images.
         """
         return len(self._files)-1-self.index
+
+    def can_zoom_in(self) -> bool:
+        """
+        Check if it is possible to zoom in further on the current image.
+
+        Returns:
+            bool: True if it is possible to zoom in, False otherwise.
+        """
+        return 10 >= self._zoom_level
+
+    def can_zoom_out(self) -> bool:
+        """
+        Check if it is possible to zoom out further on the current image.
+
+        Returns:
+            bool: True if it is possible to zoom out, False otherwise.
+        """
+        return self._zoom_level > 0
+
+    def zoom_in(self):
+        """
+        Zoom in on the current image by increasing the zoom level and redrawing the display.
+        """
+        self._zoom_level += 1
+        self.display()
+
+    def zoom_out(self):
+        """
+        Zoom out on the current image by decreasing the zoom level and redrawing the display.
+        """
+        self._zoom_level -= 1
+        self.display()
 
     def has_next(self) -> bool:
         """
@@ -346,7 +385,7 @@ class Album(HelpersMixin):
         """
         self.index = len(self._files)-1
 
-    def get_scaled_current(self) -> pathlib.Path:
+    def get_scaled_current(self) -> pathlib.Path | None:
         """
         Get the scaled version of the current image.
 
@@ -357,7 +396,7 @@ class Album(HelpersMixin):
             return self.current
 
         key = 0
-        i_id = self._scaler.scale(self.current)
+        i_id = self._scaler.scale(self.current, self._zoom_level)
 
         while not self._scaler.is_done(i_id) and key not in self.exit_keys:
             key = self._window.getch()
@@ -439,7 +478,7 @@ class Album(HelpersMixin):
             self._window.erase()
             self._window.refresh()
             if os.system(f'kitty icat --clear "{current}"' + (' 2> /dev/null' if hide_err else '')):
-                return
+                return None
 
         except ScalingError:
             self.display_error()
@@ -487,17 +526,22 @@ class Album(HelpersMixin):
                 self.goto_last()
             elif key == curses.KEY_HOME and self.has_prev():
                 self.goto_first()
+            elif key == ord('=') and self.can_zoom_in():
+                self.zoom_in()
+            elif key == ord('-') and self.can_zoom_out():
+                self.zoom_out()
 
             time.sleep(ITER_DELAY)
 
         self.teardown()
 
 
-def main(args: list[str]) -> str:
+def main(args: list[str]) -> str | None:
     curses.wrapper(Album(pathlib.Path(args[1] if len(args) > 1 else '.')))
+    return None
 
 
-def handle_result(args: list[str], answer: str, target_window_id: int, boss: any) -> None:
+def handle_result(args: list[str], answer: str, target_window_id: int, boss: typing.Any) -> None:
     pass
 
 
