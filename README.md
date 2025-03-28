@@ -1,5 +1,8 @@
 <h1 align="center">
     kitty-album
+    <a href='https://github.com/mrf345/kitty-album/actions/workflows/ci.yml'>
+        <img src='https://github.com/mrf345/kitty-album/actions/workflows/ci.yml/badge.svg'>
+    </a>
 </h1>
 
 <p align="center">
